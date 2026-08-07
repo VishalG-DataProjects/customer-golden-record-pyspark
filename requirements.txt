@@ -1,1 +1,156 @@
+# Requirements Document — Golden Customer Record
 
+## 1. Background
+
+The company holds customer data in more than one system. Over time the same
+customer has ended up recorded in different places, in different formats, with
+different levels of completeness. The two systems in scope are:
+
+- **CRM System** — primary customer registration and profile data
+  (`crm_customers.csv`)
+- **Transaction System** — customer details captured during purchases
+  (`transaction_customers.csv`)
+
+Because the two systems were populated independently, the same person may
+appear in both, the same field may hold values in different formats, and some
+values are missing entirely. This makes the data unreliable for reporting and
+analytics.
+
+## 2. Objective
+
+Produce a **Golden Customer Record** dataset: a single, clean, de-duplicated
+view of each customer, built by reconciling the two sources. The result must be
+comprehensive and accurate enough for downstream analytics and general business
+use.
+
+## 3. Scope
+
+**In scope**
+
+- Reading both CSV sources.
+- Cleaning and standardising fields within each source.
+- Matching records that refer to the same customer across both sources.
+- Merging matched records into one golden record per customer.
+- Writing the golden dataset to a CSV output.
+- Automated tests covering the core logic.
+
+**Out of scope**
+
+- A user interface.
+- A live database or streaming integration.
+- Fuzzy / typo-tolerant matching (noted as a future extension).
+
+## 4. Input data
+
+### 4.1 CRM (`crm_customers.csv`)
+
+Columns: `customer_id`, `first_name`, `last_name`, `email`, `phone`,
+`address`, `city`, `country`, `registration_date`, `last_updated`.
+
+### 4.2 Transactions (`transaction_customers.csv`)
+
+Columns: `transaction_id`, `customer_email`, `first_name`, `last_name`,
+`phone`, `shipping_address`, `city`, `country`, `purchase_date`.
+
+### 4.3 Known data quality issues
+
+These were observed in the data and the solution must handle them:
+
+| Issue | Example | Handling required |
+|-------|---------|-------------------|
+| Two date formats | `2024-01-06` vs `20211010` | Standardise to `YYYY-MM-DD` |
+| Inconsistent phone formats | `+447712340000` vs `447712340000` | Normalise before comparing |
+| Missing emails | blank `email` / `customer_email` | Must not drop the record |
+| Case / whitespace differences | ` John.DOE@X.com ` | Normalise before comparing |
+| Duplicate customers within a source | same email twice in CRM | Must be collapsed |
+| Same customer across both sources | matching email in both files | Must be merged, not duplicated |
+
+## 5. Functional requirements
+
+| ID | Requirement |
+|----|-------------|
+| FR1 | The system shall read both CSV files. |
+| FR2 | The system shall standardise emails (lower-case, trimmed). |
+| FR3 | The system shall standardise names (trimmed, title-cased). |
+| FR4 | The system shall normalise phone numbers to a comparable form. |
+| FR5 | The system shall convert all dates to ISO `YYYY-MM-DD`, leaving unparseable values empty. |
+| FR6 | The system shall treat records sharing an identifier as the same customer, preferring email, then phone, then name. |
+| FR7 | The system shall not discard records that have a missing email. |
+| FR8 | The system shall merge matched records into one golden record, choosing the most recent value for each field. |
+| FR9 | Each golden record shall record its provenance: contributing sources, original source IDs, and how many source rows it came from. |
+| FR10 | Each golden record shall have a unique golden ID. |
+| FR11 | The system shall write the golden dataset to `golden_customers.csv`. |
+
+## 6. Non-functional requirements
+
+| ID | Requirement |
+|----|-------------|
+| NFR1 | The pipeline shall run with the Python standard library only (no install needed to run it). |
+| NFR2 | The code shall be readable and documented, with a clear separation between cleaning, matching, and merging. |
+| NFR3 | The core logic shall be covered by automated tests. |
+| NFR4 | The solution shall run from the command line with a single command. |
+| NFR5 | The merge strategy shall be a single, swappable function so the rule (e.g. "most recent wins" vs "trust CRM first") can be changed easily. |
+
+## 7. Output
+
+A CSV, `golden_customers.csv`, with one row per customer:
+
+| Column | Description |
+|--------|-------------|
+| `golden_id` | Unique golden record ID |
+| `first_name`, `last_name` | Best (most recent) name |
+| `email`, `phone` | Standardised contact details |
+| `address`, `city`, `country` | Best (most recent) location |
+| `last_event_date` | Most recent activity date across sources |
+| `sources` | Contributing systems (e.g. `CRM;TXN`) |
+| `source_ids` | Original source record IDs |
+| `record_count` | Number of source rows merged |
+
+## 8. Design decisions and their rationale
+
+These are the choices made in the solution, recorded so a reviewer can
+challenge them.
+
+1. **Email is the primary match key**, with phone then name as fallbacks.
+   Email is the strongest unique identifier, but both files contain blank
+   emails, so falling back to phone and name prevents those records from being
+   dropped or wrongly treated as unique.
+
+2. **Phone is reduced to digits only** before matching, because the two systems
+   store the same number with and without a `+` prefix.
+
+3. **"Most recent value wins"** on merge, using each record's event date (CRM
+   registration date or transaction purchase date). This keeps the golden
+   record current. It is isolated in one function so it can be replaced with a
+   source-priority rule if the business prefers.
+
+4. **Provenance is retained** (`sources`, `source_ids`, `record_count`) so any
+   golden record can be traced back to its origin rows for audit.
+
+## 9. Assumptions
+
+- After cleaning, matching is exact; near-duplicate typos are not reconciled.
+- Where two records disagree and both have dates, the newer one is authoritative.
+- The two input files are the complete and only sources for this exercise.
+
+## 10. Acceptance criteria
+
+The solution is complete when:
+
+- Running `python main.py` produces `golden_customers.csv` without errors.
+- The output contains no duplicate `golden_id` values.
+- Customers appearing in both sources appear once, with `sources = CRM;TXN`.
+- Records with missing emails are still present in the output.
+- All dates in the output are in `YYYY-MM-DD` form.
+- The test suite passes (`python -m pytest test.py`).
+
+## 11. Deliverables
+
+| File | Purpose |
+|------|---------|
+| `main.py` | The pipeline |
+| `test.py` | Automated tests |
+| `requirements.txt` | Dependencies (pytest, for testing only) |
+| `README.md` | How to run and how it works |
+| `REQUIREMENTS.md` | This document |
+| `golden_customers.csv` | Generated output |
